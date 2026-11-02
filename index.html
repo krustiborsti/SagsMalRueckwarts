@@ -24,7 +24,61 @@ function author(){return round%2}function guesser(){return 1-author()}
 function scoreboard(){for(let i=0;i<2;i++){$('p'+i).textContent=names[i];$('s'+i).textContent=scores[i]}}
 const steps=[['🎤','Geheimen Begriff aufnehmen','Sprich deinen Begriff ein.'],['📱','Gerät übergeben','Jetzt ist die andere Person dran.'],['🔊','Rückwärts anhören','Höre dir den verdrehten Klang an.'],['🎙️','Klang imitieren','Sprich nach, was du rückwärts gehört hast.'],['↶','Deine Stimme zurückdrehen','Jetzt wird aus deiner Imitation vielleicht wieder ein Wort.'],['🏁','Runde auflösen','War die Lösung richtig?']];
 function setPhase(n){phase=n;for(let i=0;i<6;i++)visible('phase'+i,i===n);$('stepLabel').textContent='RUNDE '+(round+1)+' / '+total+' · SCHRITT '+(n+1)+' / 6';$('progress').innerHTML=Array.from({length:6},(_,i)=>'<span class="'+(i<n?'done':i===n?'active':'')+'"></span>').join('');$('stageIcon').textContent=steps[n][0];$('heading').textContent=steps[n][1];$('instructions').textContent=n===0?names[author()]+', du bist dran!':n===1?'Weiter geht es mit '+names[guesser()]:steps[n][2];$('receiver').textContent=names[guesser()];$('roundBar').innerHTML=Array.from({length:total},(_,i)=>'<span class="'+(i===round?'current':'')+'">'+(i<round?'✓ ':'' )+'R'+(i+1)+'</span>').join('');requestAnimationFrame(()=>{const top=$('game').getBoundingClientRect().top+window.scrollY-4;window.scrollTo({top:Math.max(0,top),behavior:'instant'});})}
-async function startRecording(n){if(recording)return;try{if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw Error('Dieser Browser unterstützt keine Mikrofonaufnahme. Bitte über HTTPS in Safari oder Chrome öffnen.');stream=await navigator.mediaDevices.getUserMedia({audio:true});let token=++recordToken;let chunks=[];if(n===0&&$('flashEnabled').checked)prepareTorch();startLiveWave(n,stream);let type=['audio/mp4','audio/webm;codecs=opus','audio/webm'].find(t=>MediaRecorder.isTypeSupported(t));recorder=new MediaRecorder(stream,type?{mimeType:type}:undefined);recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};recorder.onstop=async()=>{stopLiveWave();stream?.getTracks().forEach(t=>t.stop());stream=null;recording=false;if(token!==recordToken)return;if(n===0&&$('flashEnabled').checked)signalFinished();try{ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();await ctx.resume();let data=await new Blob(chunks,{type:recorder.mimeType}).arrayBuffer();let decoded=await ctx.decodeAudioData(data);buffers[n]=trimSpeech(decoded);drawWave('wave'+n,buffers[n],false);$('waveinfo'+n).textContent='Automatisch zugeschnitten';drawWave('reversewave'+n,buffers[n],true);visible('wavebox'+n,true);visible('playwave'+n,true);$('duration'+n).textContent=buffers[n].duration.toFixed(1)+' s';$('playduration'+n).textContent=buffers[n].duration.toFixed(1)+' s';$('status'+n).textContent='✓ Aufnahme gespeichert · '+buffers[n].duration.toFixed(1)+' Sekunden';$('to'+(n===0?1:4)).disabled=false}catch(e){$('status'+n).textContent='Fehler beim Verarbeiten: '+e.message}};recorder.start();recording=true;visible('rec'+n,false);visible('stop'+n,true);$('status'+n).textContent='🔴 Aufnahme läuft …';$('to'+(n===0?1:4)).disabled=true}catch(e){$('status'+n).textContent='Mikrofon nicht verfügbar: '+e.message;stream?.getTracks().forEach(t=>t.stop())}}
+async function startRecording(n){
+ if(recording)return;
+ recording=true;
+ const token=++recordToken;
+ let localStream=null,localRecorder=null;
+ try{
+  if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw Error('Mikrofonaufnahme wird von diesem Browser nicht unterstützt.');
+  stopPlayback();
+  localStream=await navigator.mediaDevices.getUserMedia({audio:true});
+  if(token!==recordToken){localStream.getTracks().forEach(t=>t.stop());recording=false;return}
+  stream=localStream;
+  const chunks=[];
+  const type=['audio/mp4','audio/webm;codecs=opus','audio/webm'].find(t=>MediaRecorder.isTypeSupported(t));
+  localRecorder=new MediaRecorder(localStream,type?{mimeType:type}:undefined);
+  recorder=localRecorder;
+  localRecorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
+  localRecorder.onerror=e=>{$('status'+n).textContent='Aufnahmefehler. Bitte erneut versuchen.'};
+  localRecorder.onstop=async()=>{
+   stopLiveWave();
+   localStream.getTracks().forEach(t=>t.stop());
+   if(stream===localStream)stream=null;
+   if(recorder===localRecorder)recorder=null;
+   try{
+    if(token!==recordToken)return;
+    const bytes=await new Blob(chunks,{type:localRecorder.mimeType}).arrayBuffer();
+    if(!bytes.byteLength)throw Error('Keine Audiodaten aufgenommen');
+    ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();
+    const decoded=await ctx.decodeAudioData(bytes.slice(0));
+    if(token!==recordToken)return;
+    buffers[n]=trimSpeech(decoded);
+    visible('wavebox'+n,true);
+    visible('playwave'+n,true);
+    drawWave('wave'+n,buffers[n],false);
+    drawWave('reversewave'+n,buffers[n],true);
+    $('waveinfo'+n).textContent='Automatisch zugeschnitten';
+    $('duration'+n).textContent=buffers[n].duration.toFixed(1)+' s';
+    $('playduration'+n).textContent=buffers[n].duration.toFixed(1)+' s';
+    $('status'+n).textContent='✓ Aufnahme gespeichert · '+buffers[n].duration.toFixed(1)+' Sekunden';
+    $('to'+(n===0?1:4)).disabled=false;
+    if(n===0&&$('flashEnabled').checked)signalFinished();
+   }catch(e){
+    if(token===recordToken)$('status'+n).textContent='Audio konnte nicht verarbeitet werden: '+e.message+'. Bitte erneut aufnehmen.';
+   }finally{if(token===recordToken)recording=false}
+  };
+  localRecorder.start();
+  startLiveWave(n,localStream);
+  visible('rec'+n,false);visible('stop'+n,true);
+  $('status'+n).textContent='🔴 Aufnahme läuft …';
+  $('to'+(n===0?1:4)).disabled=true;
+ }catch(e){
+  recording=false;
+  localStream?.getTracks().forEach(t=>t.stop());
+  $('status'+n).textContent='Mikrofon nicht verfügbar: '+e.message;
+ }
+}
 // Trim only leading/trailing quiet regions; retain short pauses within speech.
 function trimSpeech(buffer){const sr=buffer.sampleRate,channels=buffer.numberOfChannels,frames=buffer.length;const win=Math.max(1,Math.floor(sr*.02)),count=Math.ceil(frames/win);let rms=new Float32Array(count),peak=0;for(let w=0;w<count;w++){let sum=0,n=0;const a=w*win,z=Math.min(frames,a+win);for(let i=a;i<z;i+=2){let sample=0;for(let c=0;c<channels;c++)sample+=buffer.getChannelData(c)[i]/channels;sum+=sample*sample;n++}rms[w]=Math.sqrt(sum/Math.max(n,1));peak=Math.max(peak,rms[w])}if(peak<.003)return buffer;const sorted=Array.from(rms).sort((a,b)=>a-b);const floor=sorted[Math.floor(sorted.length*.2)]||0;const threshold=Math.max(.004,Math.min(.035,Math.max(floor*2.7,peak*.075)));let first=-1,last=-1;for(let i=0;i<count;i++){let local=0;for(let j=Math.max(0,i-2);j<=Math.min(count-1,i+2);j++)local=Math.max(local,rms[j]);if(local>=threshold){if(first<0)first=i;last=i}}if(first<0)return buffer;const from=Math.max(0,Math.floor(first*win-sr*.17)),to=Math.min(frames,Math.ceil((last+1)*win+sr*.23));if(to-from<sr*.12)return buffer;const out=ctx.createBuffer(channels,to-from,sr);for(let c=0;c<channels;c++)out.getChannelData(c).set(buffer.getChannelData(c).subarray(from,to));return out}
 function drawWave(id,buffer,reversed){const canvas=$(id);if(!canvas||!buffer)return;const dpr=Math.min(devicePixelRatio||1,2),width=Math.max(250,Math.round(canvas.getBoundingClientRect().width||440)),height=92;canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);const g=canvas.getContext('2d');g.scale(dpr,dpr);g.clearRect(0,0,width,height);const data=buffer.getChannelData(0),bars=Math.floor(width/4),step=Math.max(1,Math.floor(data.length/bars));g.fillStyle=reversed?'#b79bff':'#68dfcc';for(let b=0;b<bars;b++){const index=reversed?bars-1-b:b;let start=index*step,end=Math.min(data.length,start+step),max=0;for(let i=start;i<end;i+=Math.max(1,Math.floor(step/20)))max=Math.max(max,Math.abs(data[i]));let amplitude=Math.max(2,Math.min(height*.47,max*height*1.7));g.fillRect(b*4,(height/2)-amplitude,2.5,amplitude*2)}}
@@ -36,7 +90,7 @@ function stopLiveWave(){if(liveFrame)cancelAnimationFrame(liveFrame);liveFrame=0
 function stopPlayback(){if(playFrame)cancelAnimationFrame(playFrame);playFrame=0;if(playbackNode){try{playbackNode.stop()}catch(e){}playbackNode.disconnect();playbackNode=null}for(let i=0;i<2;i++)$('head'+i).style.display='none'}
 function stopRecording(n){if(recorder?.state==='recording'){recorder.stop();visible('rec'+n,true);visible('stop'+n,false)}}
 async function reversePlay(n){let b=buffers[n];if(!b)return;try{ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();await ctx.resume();let out=ctx.createBuffer(b.numberOfChannels,b.length,b.sampleRate);for(let c=0;c<b.numberOfChannels;c++){let src=b.getChannelData(c),dst=out.getChannelData(c);for(let i=0;i<src.length;i++)dst[i]=src[src.length-1-i]}stopPlayback();let node=ctx.createBufferSource();node.buffer=out;node.connect(ctx.destination);playbackNode=node;const head=$('head'+n),start=ctx.currentTime;head.style.display='block';head.style.left='0%';node.onended=()=>{if(playbackNode!==node)return;playbackNode=null;head.style.display='none';if(playFrame)cancelAnimationFrame(playFrame);playFrame=0};node.start();function animate(){if(playbackNode!==node)return;head.style.left=(Math.min(1,(ctx.currentTime-start)/out.duration)*100)+'%';playFrame=requestAnimationFrame(animate)}animate();played=true}catch(e){alert('Wiedergabe fehlgeschlagen: '+e.message)}}
-function resetRound(){releaseTorch();stopPlayback();stopLiveWave();buffers=[null,null];recordToken++;$('secret').value='';$('answer').value='';$('status0').textContent='';$('status1').textContent='';$('to1').disabled=true;$('to4').disabled=true;visible('wavebox0',false);visible('wavebox1',false);visible('playwave0',false);visible('playwave1',false);visible('rec0',true);visible('rec1',true);visible('stop0',false);visible('stop1',false);played=false}
+function resetRound(){recording=false;releaseTorch();stopPlayback();stopLiveWave();buffers=[null,null];recordToken++;$('secret').value='';$('answer').value='';$('status0').textContent='';$('status1').textContent='';$('to1').disabled=true;$('to4').disabled=true;visible('wavebox0',false);visible('wavebox1',false);visible('playwave0',false);visible('playwave1',false);visible('rec0',true);visible('rec1',true);visible('stop0',false);visible('stop1',false);played=false}
 function scoreCards(){return names.map((n,i)=>'<div class="player"><strong>'+escapeHtml(n)+'</strong><b>'+scores[i]+'</b><span class="mini">Punkte</span></div>').join('')}
 function escapeHtml(s){return s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function award(correct){if(correct)scores[guesser()]++;history.push({round:round+1,guesser:names[guesser()],correct,secret:$('secret').value.trim()});$('betweenTitle').textContent=correct?'Punkt für '+names[guesser()]+'!':'Knapp daneben!';$('betweenText').textContent='Runde '+(round+1)+' von '+total+' ist abgeschlossen.';$('betweenScores').innerHTML=scoreCards();round++;if(round>=total){finish()}else{screen('between')}}
